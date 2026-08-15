@@ -5,3 +5,8 @@ compatibility_flags = ["nodejs_compat"]
 
 [vars]
 ADMIN_TOKEN = "local-dev-token-change-me"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "linkit-db"
+database_id = "00000000-0000-0000-0000-000000000000"
