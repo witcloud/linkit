@@ -25,6 +25,10 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+function errorResponse(message: string, status = 400): Response {
+  return jsonResponse({ error: message }, status);
+}
+
 function generateShortCode(): string {
   const bytes = new Uint8Array(SHORT_CODE_LENGTH);
   crypto.getRandomValues(bytes);
@@ -349,8 +353,12 @@ export default {
     ctx: ExecutionContext
   ): Promise<Response> {
     const url = new URL(request.url);
+    const path = url.pathname;
+    const method = request.method;
 
-    if (request.method === "GET" && url.pathname === "/admin") {
+    // 1. Admin UI
+    if (path === "/admin") {
+      if (method !== "GET") return errorResponse("Method Not Allowed", 405);
       return new Response(ADMIN_HTML, {
         status: 200,
         headers: {
@@ -359,39 +367,60 @@ export default {
       });
     }
 
-    if (url.pathname.startsWith("/api/links")) {
-      const pathSegments = url.pathname
-        .slice("/api/links".length)
-        .split("/")
-        .filter(Boolean);
-
-      if (request.method === "POST" && url.pathname === "/api/links") {
+    // 2. API Routes
+    if (path === "/api/links") {
+      if (method === "GET") {
         if (!checkAdminAuth(request, env)) {
-          return jsonResponse({ error: "Unauthorized" }, 401);
+          return errorResponse("Unauthorized", 401);
+        }
+        try {
+          const rows = await env.DB.prepare(
+            "SELECT id, short_code, original_url, click_count, last_visited_at, expires_at, created_at FROM links ORDER BY created_at DESC"
+          ).all<LinkRow>();
+          const enriched = (rows.results || []).map((r) => ({
+            id: r.id,
+            short_code: r.short_code,
+            short_url: buildShortUrl(request, r.short_code),
+            original_url: r.original_url,
+            click_count: r.click_count,
+            last_visited_at: r.last_visited_at,
+            expires_at: r.expires_at,
+            created_at: r.created_at,
+          }));
+          return jsonResponse(enriched);
+        } catch (err) {
+          console.error("Database error:", err);
+          return errorResponse("Internal Server Error", 500);
+        }
+      }
+
+      if (method === "POST") {
+        if (!checkAdminAuth(request, env)) {
+          return errorResponse("Unauthorized", 401);
         }
         let body: { original_url?: string; expiration?: string };
         try {
           body = await request.json();
         } catch {
-          return jsonResponse({ error: "Invalid JSON body" }, 400);
+          return errorResponse("Invalid JSON body", 400);
         }
 
         const originalUrl = body?.original_url;
         const expirationRaw = body?.expiration;
 
         if (!originalUrl || typeof originalUrl !== "string") {
-          return jsonResponse({ error: "Missing required field: original_url" }, 400);
+          return errorResponse("Missing required field: original_url", 400);
         }
 
         if (!expirationRaw || typeof expirationRaw !== "string") {
-          return jsonResponse({ error: "Missing required field: expiration" }, 400);
+          return errorResponse("Missing required field: expiration", 400);
         }
 
         if (!VALID_EXPIRATIONS.includes(expirationRaw as ExpirationOption)) {
-          return jsonResponse(
-            {
-              error: `Invalid expiration option. Must be one of: ${VALID_EXPIRATIONS.join(", ")}`,
-            },
+          return errorResponse(
+            `Invalid expiration option. Must be one of: ${VALID_EXPIRATIONS.join(
+              ", "
+            )}`,
             400
           );
         }
@@ -400,14 +429,11 @@ export default {
         try {
           parsedUrl = new URL(originalUrl);
         } catch {
-          return jsonResponse({ error: "Invalid URL" }, 400);
+          return errorResponse("Invalid URL format", 400);
         }
 
         if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
-          return jsonResponse(
-            { error: "Only http and https URLs are allowed" },
-            400
-          );
+          return errorResponse("Only http and https URLs are allowed", 400);
         }
 
         const expiration = expirationRaw as ExpirationOption;
@@ -419,10 +445,9 @@ export default {
         for (let attempt = 0; attempt < MAX_SHORT_CODE_RETRIES; attempt++) {
           const candidate = generateShortCode();
           try {
-            const info = await env.DB
-              .prepare(
-                "INSERT INTO links (short_code, original_url, expires_at) VALUES (?, ?, ?)"
-              )
+            const info = await env.DB.prepare(
+              "INSERT INTO links (short_code, original_url, expires_at) VALUES (?, ?, ?)"
+            )
               .bind(candidate, originalUrl, expiresAt)
               .run();
 
@@ -434,13 +459,14 @@ export default {
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             if (!message.includes("UNIQUE") && !message.includes("unique")) {
-              return jsonResponse({ error: "Database error" }, 500);
+              console.error("Database error during insert:", err);
+              return errorResponse("Internal Server Error", 500);
             }
           }
         }
 
         if (!insertSuccess || !shortCode) {
-          return jsonResponse({ error: "Failed to generate unique short code" }, 500);
+          return errorResponse("Failed to generate unique short code", 500);
         }
 
         return jsonResponse(
@@ -454,138 +480,78 @@ export default {
         );
       }
 
-      if (request.method === "GET" && url.pathname === "/api/links") {
-        if (!checkAdminAuth(request, env)) {
-          return jsonResponse({ error: "Unauthorized" }, 401);
-        }
-        try {
-          const rows = await env.DB
-            .prepare(
-              "SELECT id, short_code, original_url, click_count, last_visited_at, expires_at, created_at FROM links ORDER BY created_at DESC"
-            )
-            .all<LinkRow>();
-          const enriched = (rows.results || []).map((r) => ({
-            id: r.id,
-            short_code: r.short_code,
-            short_url: buildShortUrl(request, r.short_code),
-            original_url: r.original_url,
-            click_count: r.click_count,
-            last_visited_at: r.last_visited_at,
-            expires_at: r.expires_at,
-            created_at: r.created_at,
-          }));
-          return jsonResponse(enriched);
-        } catch {
-          return jsonResponse({ error: "Database error" }, 500);
-        }
-      }
+      return errorResponse("Method Not Allowed", 405);
+    }
 
-      if (request.method === "DELETE" && pathSegments.length === 1) {
-        if (!checkAdminAuth(request, env)) {
-          return jsonResponse({ error: "Unauthorized" }, 401);
+    // 3. API Delete Route
+    if (path.startsWith("/api/links/")) {
+      if (method !== "DELETE") return errorResponse("Method Not Allowed", 405);
+      if (!checkAdminAuth(request, env)) {
+        return errorResponse("Unauthorized", 401);
+      }
+      const idStr = path.slice("/api/links/".length);
+      const id = Number(idStr);
+      if (!Number.isInteger(id) || id <= 0) {
+        return errorResponse("Invalid link id", 400);
+      }
+      try {
+        const info = await env.DB.prepare("DELETE FROM links WHERE id = ?")
+          .bind(id)
+          .run();
+        if (!info.success || (info.meta.changes ?? 0) === 0) {
+          return errorResponse("Link not found", 404);
         }
-        const idStr = pathSegments[0];
-        const id = Number(idStr);
-        if (!Number.isInteger(id) || id <= 0) {
-          return jsonResponse({ error: "Invalid link id" }, 400);
-        }
-        try {
-          const info = await env.DB
-            .prepare("DELETE FROM links WHERE id = ?")
-            .bind(id)
-            .run();
-          if (!info.success || (info.meta.changes ?? 0) === 0) {
-            return jsonResponse({ error: "Link not found" }, 404);
-          }
-          return jsonResponse({ ok: true, deleted_id: id });
-        } catch {
-          return jsonResponse({ error: "Database error" }, 500);
-        }
+        return jsonResponse({ ok: true, deleted_id: id });
+      } catch (err) {
+        console.error("Database error during delete:", err);
+        return errorResponse("Internal Server Error", 500);
       }
     }
 
-    if (request.method === "GET" && url.pathname === "/health") {
+    // 4. Health Check
+    if (path === "/health") {
+      if (method !== "GET") return errorResponse("Method Not Allowed", 405);
       const hasDb = typeof env.DB !== "undefined";
-      return new Response(
-        JSON.stringify({
-          status: "ok",
-          service: "linkit",
-          timestamp: new Date().toISOString(),
-          bindings: {
-            db: hasDb,
-          },
-        }),
-        {
-          status: 200,
-          headers: {
-            "Content-Type": "application/json;charset=UTF-8",
-          },
-        }
-      );
+      return jsonResponse({
+        status: "ok",
+        service: "linkit",
+        timestamp: new Date().toISOString(),
+        bindings: {
+          db: hasDb,
+        },
+      });
     }
 
-    if (request.method === "GET" && url.pathname === "/api/debug/db") {
+    // 5. Debug Route (Restricted or sanitized)
+    if (path === "/api/debug/db") {
+      if (method !== "GET") return errorResponse("Method Not Allowed", 405);
       try {
         if (!env.DB) {
-          return new Response(
-            JSON.stringify({
-              ok: false,
-              error: "D1 binding DB is not available",
-            }),
-            {
-              status: 500,
-              headers: { "Content-Type": "application/json;charset=UTF-8" },
-            }
-          );
+          return errorResponse("D1 binding DB is not available", 500);
         }
 
         const testParam = "linkit-phase2";
-        const oneRow = await env.DB
-          .prepare("SELECT 1 AS ping, ? AS echo")
+        const oneRow = await env.DB.prepare("SELECT 1 AS ping, ? AS echo")
           .bind(testParam)
           .first<{ ping: number; echo: string }>();
 
-        let sqliteInfo: string | null = null;
-        try {
-          const info = await env.DB
-            .prepare("SELECT date('now') AS db_time")
-            .first<{ db_time: string }>();
-          sqliteInfo = info?.db_time ?? null;
-        } catch {
-          sqliteInfo = null;
-        }
-
-        return new Response(
-          JSON.stringify({
-            ok: true,
-            binding: "DB",
-            ping: oneRow?.ping ?? null,
-            echo: oneRow?.echo ?? null,
-            param_bind_match: oneRow?.echo === testParam,
-            db_time: sqliteInfo,
-            timestamp: new Date().toISOString(),
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json;charset=UTF-8" },
-          }
-        );
+        return jsonResponse({
+          ok: true,
+          binding: "DB",
+          ping: oneRow?.ping ?? null,
+          echo: oneRow?.echo ?? null,
+          param_bind_match: oneRow?.echo === testParam,
+          timestamp: new Date().toISOString(),
+        });
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return new Response(
-          JSON.stringify({
-            ok: false,
-            error: message,
-          }),
-          {
-            status: 500,
-            headers: { "Content-Type": "application/json;charset=UTF-8" },
-          }
-        );
+        console.error("Debug route error:", err);
+        return errorResponse("Internal Server Error", 500);
       }
     }
 
-    if (request.method === "GET" && url.pathname === "/") {
+    // 6. Root Route
+    if (path === "/") {
+      if (method !== "GET") return errorResponse("Method Not Allowed", 405);
       return new Response("LinkIt URL Shortener - Phase 1 OK", {
         status: 200,
         headers: {
@@ -594,78 +560,61 @@ export default {
       });
     }
 
-    if (request.method === "GET") {
-      const pathSegments = url.pathname.split("/").filter(Boolean);
-      if (pathSegments.length === 1) {
-        const shortCode = pathSegments[0];
+    // 7. Short Code Redirect
+    const pathSegments = path.split("/").filter(Boolean);
+    if (pathSegments.length === 1) {
+      if (method !== "GET") return errorResponse("Method Not Allowed", 405);
+      const shortCode = pathSegments[0];
 
-        let link:
-          | {
-              original_url: string;
-              expires_at: string | null;
-            }
-          | null = null;
-        try {
-          link = await env.DB
-            .prepare(
-              "SELECT original_url, expires_at FROM links WHERE short_code = ?"
-            )
-            .bind(shortCode)
-            .first<{ original_url: string; expires_at: string | null }>();
-        } catch {
-          return new Response("Internal Server Error", {
-            status: 500,
-            headers: { "Content-Type": "text/plain;charset=UTF-8" },
-          });
-        }
-
-        if (!link) {
-          return new Response("Not Found", {
-            status: 404,
-            headers: { "Content-Type": "text/plain;charset=UTF-8" },
-          });
-        }
-
-        if (link.expires_at) {
-          const expiresAt = new Date(link.expires_at);
-          const now = new Date();
-          if (expiresAt.getTime() <= now.getTime()) {
-            return new Response("Link Expired", {
-              status: 404,
-              headers: { "Content-Type": "text/plain;charset=UTF-8" },
-            });
-          }
-        }
-
-        const visitedAt = new Date().toISOString();
-        try {
-          await env.DB
-            .prepare(
-              "UPDATE links SET click_count = click_count + 1, last_visited_at = ? WHERE short_code = ?"
-            )
-            .bind(visitedAt, shortCode)
-            .run();
-        } catch {
-          return new Response("Internal Server Error", {
-            status: 500,
-            headers: { "Content-Type": "text/plain;charset=UTF-8" },
-          });
-        }
-
-        return new Response(null, {
-          status: 302,
-          headers: {
-            Location: link.original_url,
-          },
-        });
+      let link: {
+        original_url: string;
+        expires_at: string | null;
+      } | null = null;
+      try {
+        link = await env.DB.prepare(
+          "SELECT original_url, expires_at FROM links WHERE short_code = ?"
+        )
+          .bind(shortCode)
+          .first<{ original_url: string; expires_at: string | null }>();
+      } catch (err) {
+        console.error("Database error during redirect lookup:", err);
+        return errorResponse("Internal Server Error", 500);
       }
+
+      if (!link) {
+        return errorResponse("Short code not found", 404);
+      }
+
+      if (link.expires_at) {
+        const expiresAt = new Date(link.expires_at);
+        if (expiresAt.getTime() <= Date.now()) {
+          return errorResponse("Short code has expired", 404);
+        }
+      }
+
+      const visitedAt = new Date().toISOString();
+      try {
+        ctx.waitUntil(
+          env.DB.prepare(
+            "UPDATE links SET click_count = click_count + 1, last_visited_at = ? WHERE short_code = ?"
+          )
+            .bind(visitedAt, shortCode)
+            .run()
+        );
+      } catch (err) {
+        console.error("Database error during stats update:", err);
+        // We still redirect even if update fails
+      }
+
+      return new Response(null, {
+        status: 302,
+        headers: {
+          Location: link.original_url,
+        },
+      });
     }
 
-    return new Response("Not Found", {
-      status: 404,
-      headers: {
-        "Content-Type": "text/plain;charset=UTF-8",
-      },
-    });
+    // 8. Not Found
+    return errorResponse("Not Found", 404);
   },
 };
