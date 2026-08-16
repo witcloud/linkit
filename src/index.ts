@@ -231,6 +231,73 @@ export default {
       });
     }
 
+    if (request.method === "GET") {
+      const pathSegments = url.pathname.split("/").filter(Boolean);
+      if (pathSegments.length === 1) {
+        const shortCode = pathSegments[0];
+
+        let link:
+          | {
+              original_url: string;
+              expires_at: string | null;
+            }
+          | null = null;
+        try {
+          link = await env.DB
+            .prepare(
+              "SELECT original_url, expires_at FROM links WHERE short_code = ?"
+            )
+            .bind(shortCode)
+            .first<{ original_url: string; expires_at: string | null }>();
+        } catch {
+          return new Response("Internal Server Error", {
+            status: 500,
+            headers: { "Content-Type": "text/plain;charset=UTF-8" },
+          });
+        }
+
+        if (!link) {
+          return new Response("Not Found", {
+            status: 404,
+            headers: { "Content-Type": "text/plain;charset=UTF-8" },
+          });
+        }
+
+        if (link.expires_at) {
+          const expiresAt = new Date(link.expires_at);
+          const now = new Date();
+          if (expiresAt.getTime() <= now.getTime()) {
+            return new Response("Link Expired", {
+              status: 404,
+              headers: { "Content-Type": "text/plain;charset=UTF-8" },
+            });
+          }
+        }
+
+        const visitedAt = new Date().toISOString();
+        try {
+          await env.DB
+            .prepare(
+              "UPDATE links SET click_count = click_count + 1, last_visited_at = ? WHERE short_code = ?"
+            )
+            .bind(visitedAt, shortCode)
+            .run();
+        } catch {
+          return new Response("Internal Server Error", {
+            status: 500,
+            headers: { "Content-Type": "text/plain;charset=UTF-8" },
+          });
+        }
+
+        return new Response(null, {
+          status: 302,
+          headers: {
+            Location: link.original_url,
+          },
+        });
+      }
+    }
+
     return new Response("Not Found", {
       status: 404,
       headers: {
