@@ -37,19 +37,30 @@ function generateShortCode(): string {
 
 function computeExpiresAt(option: ExpirationOption): string | null {
   if (option === "never") return null;
-  const now = new Date();
+  const created = new Date();
+  const exp = new Date(
+    Date.UTC(
+      created.getUTCFullYear(),
+      created.getUTCMonth(),
+      created.getUTCDate(),
+      created.getUTCHours(),
+      created.getUTCMinutes(),
+      created.getUTCSeconds(),
+      created.getUTCMilliseconds()
+    )
+  );
   switch (option) {
     case "1d":
-      now.setDate(now.getDate() + 1);
+      exp.setUTCDate(exp.getUTCDate() + 1);
       break;
     case "7d":
-      now.setDate(now.getDate() + 7);
+      exp.setUTCDate(exp.getUTCDate() + 7);
       break;
     case "30d":
-      now.setDate(now.getDate() + 30);
+      exp.setUTCDate(exp.getUTCDate() + 30);
       break;
   }
-  return now.toISOString();
+  return exp.toISOString();
 }
 
 function buildShortUrl(request: Request, shortCode: string): string {
