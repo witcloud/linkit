@@ -9,4 +9,4 @@ ADMIN_TOKEN = "local-dev-token-change-me"
 [[d1_databases]]
 binding = "DB"
 database_name = "linkit-db"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "a9b140ba-f9fc-424d-b692-b8271b400bcd"

@@ -216,7 +216,7 @@ function refreshAuthUI() {
   if (loggedIn) {
     showStatus($("authStatus"), "已保存 Token。", "success");
   } else {
-    showStatus($("authStatus"), "请输入 Token 后点击"保存 Token"。", "info");
+    showStatus($("authStatus"), "请输入 Token 后点击 '保存 Token'。", "info");
   }
 }
 
