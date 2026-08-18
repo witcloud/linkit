@@ -1,82 +1,50 @@
-# LinkIt - URL Shortener
+# LinkIt — 极简短链接服务
 
-## 1. 项目介绍
+一个基于 Cloudflare 生态构建的轻量级 URL Shortener，适合个人或小团队作为私有短链方案使用。
 
-**LinkIt** 是一个基于 Cloudflare 生态构建的轻量级 URL 短链接服务。
+## 功能
 
-* **项目用途**：将长链接转换为易于分享的短链接。
-* **项目定位**：个人或小团队使用的私有短链接方案。
-* **核心功能**：短链接生成、管理后台、点击统计、过期管理。
-* **技术特点**：无服务器架构（Serverless）、高性能、低成本、零基础架构维护。
+- 短链接生成（6 位随机短码或 3–24 位自定义别名）
+- 302 重定向跳转
+- 点击次数统计与最后访问时间记录
+- 过期管理（永久 / 1 天 / 7 天 / 30 天）
+- Web 管理后台（创建、列表、搜索、删除）
+- 管理员账号体系（PBKDF2 密码哈希 + Session Cookie 鉴权）
+- 暗色主题与移动端响应式 UI
 
-这是一个由 **Cloudflare Workers + D1 + TypeScript** 实现的轻量级 URL Shortener。
+## 技术栈
 
----
+- **运行时**: [Cloudflare Workers](https://workers.cloudflare.com/)
+- **数据库**: [Cloudflare D1](https://developers.cloudflare.com/d1/) (SQLite)
+- **语言**: TypeScript
+- **构建/部署**: Wrangler CLI
+- **前端**: 原生 HTML / CSS / JavaScript（嵌入在 Worker 中，无独立前端构建）
 
-## 2. 技术栈
-
-* **运行时**: [Cloudflare Workers](https://workers.cloudflare.com/)
-* **数据库**: [Cloudflare D1](https://developers.cloudflare.com/d1/) (SQLite)
-* **编程语言**: TypeScript
-* **开发工具**: Wrangler (Cloudflare CLI)
-* **前端**: 原生 HTML / CSS / JavaScript (嵌入式管理台)
-
----
-
-## 3. 项目功能
-
-* **创建短链接**：支持将任意 http/https 链接缩短。
-* **自动生成短码**：采用 6 位随机字符生成唯一的短码。
-* **302 重定向**：高效的短链接跳转。
-* **链接管理**：内置 Web 管理后台 (`/admin`)。
-* **删除链接**：支持通过管理台或 API 删除不再需要的链接。
-* **点击次数统计**：实时记录每个短链接的访问次数。
-* **访问追踪**：记录链接的最后访问时间。
-* **过期时间管理**：支持设置 1天、7天、30天或永久有效的过期策略。
-* **URL 校验**：严格校验输入格式，仅支持 http 和 https 协议。
-* **错误处理**：统一的 JSON 格式错误响应，涵盖 400、401、404、405、500 等状态。
-
----
-
-## 4. 项目目录结构
+## 项目结构
 
 ```
 .
-├── migrations/
-│   └── 0001_create_links_table.sql  # 数据库迁移文件
+├── migrations/                       # D1 数据库迁移
+│   ├── 0001_create_links_table.sql
+│   └── 0002_create_auth_tables.sql
 ├── src/
-│   ├── index.ts                     # 业务核心逻辑 (路由、API、UI)
-│   └── worker.d.ts                  # 类型定义
-├── .gitignore                       # Git 忽略文件
-├── package.json                     # 项目配置与脚本
-├── tsconfig.json                    # TypeScript 配置
-└── wrangler.toml                    # Cloudflare 配置文件
+│   ├── index.ts                      # Worker 入口（路由、API、内嵌 UI）
+│   └── worker.d.ts                   # 全局 Env 类型定义
+├── .gitignore
+├── package.json
+├── tsconfig.json
+├── wrangler.toml                     # Cloudflare Worker 配置
+└── README.md
 ```
 
----
+> 正式部署教程见 [`docs/deployment.md`](docs/deployment.md)。
 
-## 5. 数据库设计
+## 本地开发
 
-项目使用 **Cloudflare D1** (基于 SQLite) 存储数据。
+### 前置依赖
 
-### `links` 表结构
-
-| 字段名 | 类型 | 说明 |
-| :--- | :--- | :--- |
-| `id` | INTEGER | 主键，自动递增 |
-| `short_code` | TEXT | 短码 (唯一索引) |
-| `original_url` | TEXT | 原始长链接 |
-| `click_count` | INTEGER | 点击次数 (默认 0) |
-| `last_visited_at` | TEXT | 最后访问时间 (ISO 8601) |
-| `expires_at` | TEXT | 过期时间 (ISO 8601, 可为空) |
-| `created_at` | TEXT | 创建时间 (自动生成) |
-
-* **管理方式**: 使用 D1 Migration 进行 Schema 版本管理。
-* **索引**: 对 `short_code` 和 `expires_at` 建立了索引以优化查询性能。
-
----
-
-## 6. 本地开发
+- Node.js ≥ 18
+- Wrangler CLI（`npm i -g wrangler` 或通过项目依赖使用 `npx wrangler`）
 
 ### 安装依赖
 
@@ -86,11 +54,19 @@ npm install
 
 ### 初始化本地数据库
 
-执行迁移以在本地 Miniflare 环境中创建表：
-
 ```bash
 npx wrangler d1 migrations apply linkit-db --local
 ```
+
+### 设置本地初始管理员密码（可选）
+
+本地开发时可在项目根目录创建 `.dev.vars` 文件（已被 `.gitignore` 忽略）：
+
+```
+INITIAL_ADMIN_PASSWORD=localdevpass
+```
+
+未设置时，Worker 启动会记录错误日志但不影响其他功能；首次调用任意 API 时若 D1 中无管理员账号，将跳过创建。
 
 ### 启动开发服务器
 
@@ -98,109 +74,86 @@ npx wrangler d1 migrations apply linkit-db --local
 npm run dev
 ```
 
-### 本地访问地址
+默认访问地址：
 
-* **首页**: `http://localhost:8787/`
-* **管理后台**: `http://localhost:8787/admin`
-* **API 基础路径**: `http://localhost:8787/api/links`
+- 首页：http://localhost:8787/
+- 管理后台：http://localhost:8787/admin
+- 登录页：http://localhost:8787/login
 
----
+### 类型检查
 
-## 7. 环境变量配置
+```bash
+npm run typecheck
+```
 
-在 `wrangler.toml` 中配置环境变量和绑定：
+## API 简介
 
-* **ADMIN_TOKEN**: 管理员认证令牌。用于保护创建、列表和删除接口。
-* **DB**: D1 数据库绑定。
+所有管理类 API 基于登录后下发的 `session_id` Cookie 鉴权（HttpOnly，7 天有效，HTTPS 下带 Secure 标志）。未认证返回 `401`。
 
-**注意**: 生产环境的 `ADMIN_TOKEN` 建议使用 `wrangler secret put ADMIN_TOKEN` 进行加密存储，不要直接写在配置文件中并提交到 Git。
+| 方法 | 路径 | 说明 |
+| :--- | :--- | :--- |
+| POST | `/api/auth/login` | 登录，成功后下发 Session Cookie |
+| GET  | `/api/auth/me` | 获取当前登录用户 |
+| POST | `/api/auth/logout` | 退出登录并清除 Cookie |
+| GET  | `/api/settings` | 获取当前账号信息 |
+| PATCH| `/api/settings/account` | 修改用户名 |
+| POST | `/api/settings/password` | 修改密码（修改后所有 Session 失效） |
+| GET  | `/api/links?limit=N` | 获取链接列表（可选 limit） |
+| POST | `/api/links` | 创建短链接 |
+| DELETE | `/api/links/:id` | 删除短链接 |
+| GET  | `/health` | 健康检查 |
+| GET  | `/:shortCode` | 短链跳转（302） |
 
-示例配置：
+### 创建短链接示例
+
+```bash
+curl -X POST https://your-worker.example.com/api/links \
+  -H "Content-Type: application/json" \
+  -H "Cookie: session_id=..." \
+  -d '{"original_url":"https://example.com/long","expiration":"1d","custom_alias":"my-link"}'
+```
+
+请求体字段：
+
+- `original_url`（必填，string，http/https，≤ 2048 字符）
+- `expiration`（可选，`never` | `1d` | `7d` | `30d`，默认 `never`）
+- `custom_alias`（可选，3–24 位 `[a-zA-Z0-9_-]`，不能使用保留词如 `api`/`login`/`admin` 等）
+
+## 配置说明
+
+### `wrangler.toml`（可提交 Git）
+
 ```toml
-[vars]
-ADMIN_TOKEN = "your_secure_token"
+name = "linkit"
+main = "src/index.ts"
+compatibility_date = "2024-08-06"
+compatibility_flags = ["nodejs_compat"]
 
 [[d1_databases]]
 binding = "DB"
 database_name = "linkit-db"
-database_id = "your_database_id"
+database_id = "<your-d1-database-id>"
 ```
 
----
+> `database_id` 是 Cloudflare 为你的 D1 实例分配的 UUID，不属于敏感信息，可提交 Git。新部署时需替换为你自己创建的 D1 ID。
 
-## 8. API 文档
+### Secret（不可提交 Git）
 
-所有管理 API 均需在 Header 中携带 `Authorization: Bearer <token>`。
+| 名称 | 必填 | 用途 |
+| :--- | :--- | :--- |
+| `INITIAL_ADMIN_PASSWORD` | 首次部署必填 | 仅当 D1 中尚无管理员账号时，用于创建默认账号 `admin`。要求 ≥ 8 位。设置后请立即登录后台修改密码。 |
 
-### 创建短链接
-`POST /api/links`
-* **请求体**:
-  ```json
-  {
-    "original_url": "https://example.com",
-    "expiration": "1d" 
-  }
-  ```
-  *(expiration 可选值: never, 1d, 7d, 30d)*
-* **响应**: `201 Created` 及其短链接信息。
+通过 Wrangler 设置：
 
-### 获取链接列表
-`GET /api/links`
-* **认证**: 需要 ADMIN_TOKEN。
-* **响应**: 返回所有链接的数组，按创建时间倒序排列。
-
-### 删除链接
-`DELETE /api/links/:id`
-* **认证**: 需要 ADMIN_TOKEN。
-* **响应**: `{"ok": true, "deleted_id": 123}`。
-
-### 短链接跳转
-`GET /:shortCode`
-* **说明**: 如果短码有效且未过期，返回 `302 Found` 重定向至原 URL。
-
----
-
-## 9. 部署说明
-
-### 登录 Cloudflare
 ```bash
-npx wrangler login
+npx wrangler secret put INITIAL_ADMIN_PASSWORD
 ```
 
-### 执行远程 Migration
-```bash
-npx wrangler d1 migrations apply linkit-db --remote
-```
+### 本地敏感文件（已被 `.gitignore` 忽略）
 
-### 部署 Worker
-```bash
-npm run deploy
-```
+- `.dev.vars` — 本地开发用环境变量
+- `.wrangler/` — 本地 Wrangler 缓存（含本地 D1 文件）
 
----
+## 部署入口
 
-## 10. 测试说明
-
-项目已通过以下场景的完整验证：
-* **核心功能**: 创建、跳转、统计更新、删除。
-* **校验逻辑**: 非法 URL 拦截、不支持的协议 (javascript:) 拦截。
-* **过期逻辑**: 访问已过期的短链接返回 404 且不更新统计。
-* **安全性**: 未授权访问 API 返回 401，无效路由返回 404。
-
----
-
-## 11. 注意事项
-
-* **数据库**: D1 使用 SQLite，具有最终一致性特点。
-* **轻量实现**: 本项目专注于核心功能，不包含 Redis 缓存、复杂的用户系统或 RBAC 权限控制。
-* **安全建议**: 务必在生产环境修改默认的 `ADMIN_TOKEN`。
-
----
-
-## 12. 后续可扩展方向
-
-* **频率限制 (Rate Limiting)**: 防止 API 被恶意刷量。
-* **数据分析**: 记录访问者的地理位置、设备类型等维度。
-* **自定义短码**: 允许用户指定特定的短码字符。
-* **多用户系统**: 支持多个管理员账号及各自的链接空间。
-* **二维码生成**: 在管理后台直接生成短链接对应的二维码。
+正式部署请参考 **[docs/deployment.md](docs/deployment.md)**，包含从零开始的完整步骤、自定义域名配置、验证与维护说明。

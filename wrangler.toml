@@ -3,8 +3,9 @@ main = "src/index.ts"
 compatibility_date = "2024-08-06"
 compatibility_flags = ["nodejs_compat"]
 
-[vars]
-ADMIN_TOKEN = "local-dev-token-change-me"
+# 生产部署前请通过 `wrangler secret put INITIAL_ADMIN_PASSWORD` 设置初始管理员密码。
+# 若 D1 中尚无管理员账号，Worker 首次启动时会以此密码创建默认账号 (username: admin)。
+# 设置后请立即登录后台修改密码。
 
 [[d1_databases]]
 binding = "DB"
